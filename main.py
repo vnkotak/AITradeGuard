@@ -21,6 +21,9 @@ from trading.portfolio_manager import PortfolioManager
 from analytics.performance_analytics import PerformanceAnalytics
 from alerts.telegram_alerts import TelegramAlerts
 
+from fastapi import FastAPI
+import uvicorn
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -234,5 +237,39 @@ async def main():
     finally:
         await trading_system.shutdown()
 
+#if __name__ == "__main__":
+#    asyncio.run(main())
+
+
+app = FastAPI()
+
+# Create a global trading system instance
+trading_system = TradingSystem()
+
+@app.on_event("startup")
+async def startup_event():
+    await trading_system.initialize()
+    trading_system.running = True
+    logger.info("Trading system initialized on startup")
+
+@app.get("/")
+async def root():
+    return {"status": "Trading system is running"}
+
+@app.get("/run")
+async def run_trading():
+    if trading_system.is_market_open():
+        await trading_system.run_trading_session()
+        return {"message": "Trading session completed"}
+    else:
+        return {"message": "Market is closed"}
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    await trading_system.shutdown()
+    logger.info("Trading system shutdown on app termination")
+
+# Replace the old `if __name__ == "__main__"` block with this:
 if __name__ == "__main__":
-    asyncio.run(main())
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+

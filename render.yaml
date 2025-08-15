@@ -1,6 +1,7 @@
 services:
-  - type: worker
-    name: ai-trading-worker
+  - type: web
+    name: trading-system
     env: python
+    buildCommand: pip install -r requirements.txt
     startCommand: python main.py
-    autoDeploy: true
+    plan: free
