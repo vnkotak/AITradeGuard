@@ -3,3 +3,4 @@ aiohttp
 pandas
 numpy
 scikit-learn
+asyncpg
