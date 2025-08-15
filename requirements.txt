@@ -5,4 +5,4 @@ numpy
 scikit-learn
 asyncpg
 yfinance
-ta
+TA-Lib==0.4.28
