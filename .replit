@@ -1,2 +1,31 @@
+modules = ["python-3.11"]
 [agent]
 expertMode = true
+
+[nix]
+channel = "stable-25_05"
+packages = ["cairo", "ffmpeg-full", "freetype", "ghostscript", "glibcLocales", "gobject-introspection", "gtk3", "pkg-config", "qhull", "tcl", "tk"]
+
+[workflows]
+runButton = "Project"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "AI Trading System"
+
+[[workflows.workflow]]
+name = "AI Trading System"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "pip install -r requirements.txt 2>/dev/null || pip install streamlit pandas numpy scikit-learn tensorflow yfinance ta psycopg2-binary requests plotly seaborn matplotlib asyncio websockets alpaca-trade-api && python -m streamlit run dashboard/streamlit_app.py --server.port=5000 --server.address=0.0.0.0"
+waitForPort = 5000
+
+[workflows.workflow.metadata]
+outputType = "webview"
