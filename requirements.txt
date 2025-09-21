@@ -1,1 +1,9 @@
 streamlit
+asyncio
+aiohttp
+pandas
+numpy
+scikit-learn
+asyncpg
+yfinance
+pandas-ta==0.4.71b0
