@@ -14,3 +14,4 @@ tensorflow
 optuna
 hmmlearn
 gym
+stable_baselines3
