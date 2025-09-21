@@ -2,6 +2,7 @@
 Streamlit Dashboard for AI-Gated Trading System
 Real-time monitoring and control interface
 """
+print("Streamlit app is starting...")
 
 import streamlit as st
 import pandas as pd
