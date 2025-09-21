@@ -13,3 +13,4 @@ lightgbm
 tensorflow
 optuna
 hmmlearn
+gym
