@@ -633,9 +633,9 @@ def main():
         render_controls(components)
         
     # Auto-refresh capability
-    if st.sidebar.checkbox("Auto Refresh", value=True):
-        time.sleep(60)  # Refresh every minute
-        st.rerun()
+    # if st.sidebar.checkbox("Auto Refresh", value=True):
+    #    time.sleep(60)  # Refresh every minute
+    #    st.rerun()
 
 if __name__ == "__main__":
     main()
