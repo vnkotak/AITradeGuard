@@ -91,7 +91,7 @@ def load_portfolio_data(_db_manager):
         return pd.DataFrame()
 
 @st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_trade_data(db_manager):
+def load_trade_data(_db_manager):
     """Load recent trade data"""
     try:
         # Simulated trade data
