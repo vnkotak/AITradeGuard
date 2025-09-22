@@ -15,4 +15,4 @@ optuna
 hmmlearn
 gym
 stable_baselines3
-talib
+pandas_ta
