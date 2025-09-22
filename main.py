@@ -1,641 +1,274 @@
+#!/usr/bin/env python3
 """
-Streamlit Dashboard for AI-Gated Trading System
-Real-time monitoring and control interface
+Advanced AI-Gated Algorithmic Trading System for NSE Equities
+Main entry point for the trading system
 """
-print("Streamlit app is starting...")
 
-import streamlit as st
-import pandas as pd
-import numpy as np
-import plotly.graph_objects as go
-import plotly.express as px
-from plotly.subplots import make_subplots
 import asyncio
 import logging
-from datetime import datetime, timedelta
-import time
-import json
-
-# Configure page
-st.set_page_config(
-    page_title="AI Trading Dashboard",
-    page_icon="📈",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
-
-# Import system components
+import signal
 import sys
+from datetime import datetime, time
+from typing import Dict, Any
 import os
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import Config
 from database.db_manager import DatabaseManager
+from data.market_data import MarketDataManager
 from trading.ai_gate import AIGate
+from trading.execution_engine import ExecutionEngine
 from trading.portfolio_manager import PortfolioManager
 from analytics.performance_analytics import PerformanceAnalytics
-from analytics.trade_analysis import TradeAnalysis
-from data.market_data import MarketDataManager
+from alerts.telegram_alerts import TelegramAlerts
+
+from fastapi import FastAPI
+import uvicorn
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('trading_system.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+
 logger = logging.getLogger(__name__)
 
-# Initialize components
-@st.cache_resource
-def initialize_components():
-    """Initialize system components"""
-    config = Config()
-    db_manager = DatabaseManager()
+class TradingSystem:
+    """Main trading system orchestrator"""
     
-    return {
-        'config': config,
-        'db_manager': db_manager,
-        'ai_gate': AIGate(config),
-        'portfolio_manager': PortfolioManager(config),
-        'performance_analytics': PerformanceAnalytics(config),
-        'trade_analysis': TradeAnalysis(config),
-        'market_data_manager': MarketDataManager(config)
-    }
+    def __init__(self):
+        self.config = Config()
+        self.db_manager = DatabaseManager()
+        self.market_data = MarketDataManager()
+        self.ai_gate = AIGate()
+        self.execution_engine = ExecutionEngine()
+        self.portfolio_manager = PortfolioManager()
+        self.performance_analytics = PerformanceAnalytics()
+        self.telegram_alerts = TelegramAlerts()
+        
+        self.running = False
+        self.daily_trade_count = 0
+        
+    async def initialize(self):
+        """Initialize all system components"""
+        logger.info("Initializing AI-Gated Trading System...")
+        
+        # Initialize database
+        await self.db_manager.initialize()
+        
+        # Initialize AI models
+        await self.ai_gate.initialize()
+        
+        # Initialize market data feeds
+        await self.market_data.initialize()
+        
+        # Load portfolio state
+        await self.portfolio_manager.initialize()
+        
+        logger.info("System initialization completed successfully")
+        
+    async def run_trading_session(self):
+        """Main trading session loop"""
+        logger.info("Starting trading session...")
+        
+        try:
+            # Pre-market analysis
+            await self.pre_market_analysis()
+            
+            # Main trading loop during market hours
+            while self.is_market_open() and self.running:
+                await self.trading_cycle()
+                await asyncio.sleep(self.config.SCAN_INTERVAL)
+                
+            # Post-market analysis
+            await self.post_market_analysis()
+            
+        except Exception as e:
+            logger.error(f"Error in trading session: {e}")
+            await self.telegram_alerts.send_error_alert(str(e))
+            
+    async def pre_market_analysis(self):
+        """Pre-market preparation and analysis"""
+        logger.info("Conducting pre-market analysis...")
+        
+        # Update market regime detection
+        await self.ai_gate.update_market_regime()
+        
+        # Screen stocks for potential trades
+        candidate_stocks = await self.market_data.screen_stocks()
+        
+        # Generate watchlist
+        watchlist = await self.ai_gate.generate_watchlist(candidate_stocks)
+        
+        logger.info(f"Generated watchlist with {len(watchlist)} stocks")
+        
+        # Send pre-market summary
+        await self.telegram_alerts.send_premarket_summary(watchlist)
+        
+    async def trading_cycle(self):
+        """Single trading cycle iteration"""
+        try:
+            # Skip if daily trade limit reached
+            if self.daily_trade_count >= self.config.MAX_DAILY_TRADES:
+                return
+                
+            # Get current market data
+            market_data = await self.market_data.get_current_data()
+            
+            # Generate trade signals
+            signals = await self.ai_gate.generate_signals(market_data)
+            
+            # Process each signal through AI gate
+            for signal in signals:
+                if self.daily_trade_count >= self.config.MAX_DAILY_TRADES:
+                    break
+                    
+                # AI gate decision
+                decision = await self.ai_gate.evaluate_trade(signal)
+                
+                if decision['approved']:
+                    # Execute approved trade
+                    trade_result = await self.execution_engine.execute_trade(
+                        signal, decision
+                    )
+                    
+                    if trade_result['success']:
+                        self.daily_trade_count += 1
+                        
+                        # Update portfolio
+                        await self.portfolio_manager.update_position(trade_result)
+                        
+                        # Send trade alert
+                        await self.telegram_alerts.send_trade_alert(
+                            trade_result, decision['rationale']
+                        )
+                        
+                        logger.info(f"Trade executed: {trade_result['symbol']}")
+                
+                # Log decision for learning
+                await self.ai_gate.log_decision(signal, decision)
+                
+        except Exception as e:
+            logger.error(f"Error in trading cycle: {e}")
+            
+    async def post_market_analysis(self):
+        """Post-market analysis and learning"""
+        logger.info("Conducting post-market analysis...")
+        
+        # Update trade outcomes
+        await self.portfolio_manager.update_trade_outcomes()
+        
+        # Retrain AI models with new data
+        await self.ai_gate.retrain_models()
+        
+        # Generate performance report
+        performance_report = await self.performance_analytics.generate_daily_report()
+        
+        # Send daily summary
+        await self.telegram_alerts.send_daily_summary(performance_report)
+        
+        # Reset daily counters
+        self.daily_trade_count = 0
+        
+        logger.info("Post-market analysis completed")
+        
+    def is_market_open(self) -> bool:
+        """Check if NSE market is open"""
+        now = datetime.now().time()
+        market_open = time(9, 15)  # 9:15 AM
+        market_close = time(15, 30)  # 3:30 PM
+        
+        # Check if it's a weekday and within market hours
+        weekday = datetime.now().weekday() < 5  # Monday = 0, Sunday = 6
+        return weekday and market_open <= now <= market_close
+        
+    async def shutdown(self):
+        """Graceful shutdown"""
+        logger.info("Shutting down trading system...")
+        self.running = False
+        
+        # Close all positions if required
+        await self.portfolio_manager.emergency_close_positions()
+        
+        # Save models and data
+        await self.ai_gate.save_models()
+        
+        # Close database connections
+        await self.db_manager.close()
+        
+        logger.info("System shutdown completed")
+        
+    def signal_handler(self, signum, frame):
+        """Handle shutdown signals"""
+        logger.info(f"Received signal {signum}, initiating shutdown...")
+        asyncio.create_task(self.shutdown())
+        
 
-# Load data functions
-@st.cache_data(ttl=60)  # Cache for 60 seconds
-def load_portfolio_data(_db_manager):
-    """Load portfolio data"""
+async def main():
+    """Main application entry point"""
+    # Set up signal handlers
+    trading_system = TradingSystem()
+    
+    signal.signal(signal.SIGINT, trading_system.signal_handler)
+    signal.signal(signal.SIGTERM, trading_system.signal_handler)
+    
     try:
-        query = """
-        SELECT date, total_value, daily_pnl, unrealized_pnl, realized_pnl, drawdown
-        FROM portfolio_snapshots 
-        WHERE date >= %s 
-        ORDER BY date DESC
-        LIMIT 100
-        """
+        # Initialize system
+        await trading_system.initialize()
         
-        cutoff_date = datetime.now() - timedelta(days=100)
+        # Start trading
+        trading_system.running = True
         
-        # Note: In production, you'd use async/await properly
-        # For Streamlit, we'll simulate the data loading
-        data = pd.DataFrame({
-            'date': pd.date_range(start=cutoff_date, periods=30, freq='D'),
-            'total_value': np.random.normal(1000000, 50000, 30).cumsum(),
-            'daily_pnl': np.random.normal(1000, 5000, 30),
-            'unrealized_pnl': np.random.normal(5000, 10000, 30),
-            'realized_pnl': np.random.normal(2000, 3000, 30),
-            'drawdown': np.abs(np.random.normal(0, 0.02, 30))
-        })
-        
-        return data
-        
+        if trading_system.is_market_open():
+            await trading_system.run_trading_session()
+        else:
+            logger.info("Market is closed. Running in monitoring mode...")
+            # Run background tasks for model training, analysis etc.
+            while trading_system.running:
+                await asyncio.sleep(60)  # Check every minute
+                
+    except KeyboardInterrupt:
+        logger.info("Received keyboard interrupt")
     except Exception as e:
-        st.error(f"Error loading portfolio data: {e}")
-        return pd.DataFrame()
+        logger.error(f"Unexpected error: {e}")
+    finally:
+        await trading_system.shutdown()
 
-@st.cache_data(ttl=300)  # Cache for 5 minutes
-def load_trade_data(_db_manager):
-    """Load recent trade data"""
-    try:
-        # Simulated trade data
-        symbols = ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK']
-        data = []
-        
-        for i in range(50):
-            data.append({
-                'trade_id': f'TRADE_{i:03d}',
-                'symbol': np.random.choice(symbols),
-                'entry_date': datetime.now() - timedelta(days=np.random.randint(1, 30)),
-                'entry_price': np.random.uniform(100, 3000),
-                'exit_price': np.random.uniform(100, 3000),
-                'quantity': np.random.randint(10, 1000),
-                'pnl': np.random.normal(1000, 5000),
-                'pnl_pct': np.random.normal(1, 5),
-                'status': np.random.choice(['OPEN', 'CLOSED', 'CLOSED', 'CLOSED']),
-                'ai_confidence': np.random.uniform(0.5, 1.0),
-                'hold_days': np.random.randint(1, 10)
-            })
-            
-        return pd.DataFrame(data)
-        
-    except Exception as e:
-        st.error(f"Error loading trade data: {e}")
-        return pd.DataFrame()
+#if __name__ == "__main__":
+#    asyncio.run(main())
 
-@st.cache_data(ttl=120)  # Cache for 2 minutes
-def load_market_status():
-    """Load current market status"""
-    now = datetime.now()
-    market_open = now.replace(hour=9, minute=15)
-    market_close = now.replace(hour=15, minute=30)
-    
-    is_open = market_open <= now <= market_close and now.weekday() < 5
-    
-    return {
-        'is_open': is_open,
-        'current_time': now,
-        'market_open': market_open,
-        'market_close': market_close,
-        'nifty_level': 19500 + np.random.normal(0, 100),
-        'nifty_change': np.random.normal(0, 1),
-        'volatility_index': 15 + np.random.normal(0, 2)
-    }
 
-# Dashboard functions
-def render_header():
-    """Render dashboard header"""
-    col1, col2, col3 = st.columns([2, 1, 1])
-    
-    with col1:
-        st.title("🤖 AI-Gated Trading Dashboard")
-        st.markdown("**Real-time monitoring and control interface**")
-        
-    with col2:
-        market_status = load_market_status()
-        status_color = "🟢" if market_status['is_open'] else "🔴"
-        st.metric(
-            "Market Status",
-            f"{status_color} {'OPEN' if market_status['is_open'] else 'CLOSED'}",
-            f"Nifty: {market_status['nifty_level']:.0f}"
-        )
-        
-    with col3:
-        st.metric(
-            "System Time",
-            datetime.now().strftime("%H:%M:%S"),
-            "Real-time"
-        )
+app = FastAPI()
 
-def render_portfolio_overview(components):
-    """Render portfolio overview section"""
-    st.header("📊 Portfolio Overview")
-    
-    # Load portfolio data
-    portfolio_data = load_portfolio_data(components['db_manager'])
-    
-    if not portfolio_data.empty:
-        latest = portfolio_data.iloc[0]
-        
-        col1, col2, col3, col4 = st.columns(4)
-        
-        with col1:
-            st.metric(
-                "Total Portfolio Value",
-                f"₹{latest['total_value']:,.0f}",
-                f"{latest['daily_pnl']:+,.0f}"
-            )
-            
-        with col2:
-            total_return = (latest['total_value'] / 1000000 - 1) * 100
-            st.metric(
-                "Total Return",
-                f"{total_return:+.2f}%",
-                f"₹{latest['realized_pnl']:+,.0f}"
-            )
-            
-        with col3:
-            st.metric(
-                "Unrealized P&L",
-                f"₹{latest['unrealized_pnl']:+,.0f}",
-                "Open Positions"
-            )
-            
-        with col4:
-            st.metric(
-                "Max Drawdown",
-                f"{latest['drawdown']:.2%}",
-                "Risk Metric"
-            )
-            
-        # Portfolio value chart
-        st.subheader("Portfolio Value Trend")
-        
-        fig = go.Figure()
-        fig.add_trace(go.Scatter(
-            x=portfolio_data['date'],
-            y=portfolio_data['total_value'],
-            mode='lines',
-            name='Portfolio Value',
-            line=dict(color='#1f77b4', width=2)
-        ))
-        
-        fig.update_layout(
-            title="Portfolio Value Over Time",
-            xaxis_title="Date",
-            yaxis_title="Value (₹)",
-            hovermode='x unified',
-            showlegend=False
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
+# Create a global trading system instance
+trading_system = TradingSystem()
+
+@app.on_event("startup")
+async def startup_event():
+    await trading_system.initialize()
+    trading_system.running = True
+    logger.info("Trading system initialized on startup")
+
+@app.get("/")
+async def root():
+    return {"status": "Trading system is running"}
+
+@app.get("/run")
+async def run_trading():
+    if trading_system.is_market_open():
+        await trading_system.run_trading_session()
+        return {"message": "Trading session completed"}
     else:
-        st.warning("No portfolio data available")
+        return {"message": "Market is closed"}
 
-def render_trading_activity(components):
-    """Render trading activity section"""
-    st.header("⚡ Trading Activity")
-    
-    # Load trade data
-    trade_data = load_trade_data(components['db_manager'])
-    
-    if not trade_data.empty:
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            # Recent trades
-            st.subheader("Recent Trades")
-            
-            recent_trades = trade_data.head(10)[
-                ['symbol', 'entry_date', 'pnl', 'pnl_pct', 'status', 'ai_confidence']
-            ].copy()
-            
-            # Format the data for display
-            recent_trades['entry_date'] = recent_trades['entry_date'].dt.strftime('%Y-%m-%d %H:%M')
-            recent_trades['pnl'] = recent_trades['pnl'].apply(lambda x: f"₹{x:+,.0f}")
-            recent_trades['pnl_pct'] = recent_trades['pnl_pct'].apply(lambda x: f"{x:+.2f}%")
-            recent_trades['ai_confidence'] = recent_trades['ai_confidence'].apply(lambda x: f"{x:.2f}")
-            
-            st.dataframe(recent_trades, use_container_width=True, hide_index=True)
-            
-        with col2:
-            # Trade performance metrics
-            st.subheader("Performance Metrics")
-            
-            closed_trades = trade_data[trade_data['status'] == 'CLOSED']
-            
-            if not closed_trades.empty:
-                win_rate = (closed_trades['pnl'] > 0).mean() * 100
-                avg_return = closed_trades['pnl_pct'].mean()
-                total_pnl = closed_trades['pnl'].sum()
-                total_trades = len(closed_trades)
-                
-                metrics_data = {
-                    'Metric': ['Win Rate', 'Avg Return', 'Total P&L', 'Total Trades'],
-                    'Value': [
-                        f"{win_rate:.1f}%",
-                        f"{avg_return:+.2f}%",
-                        f"₹{total_pnl:+,.0f}",
-                        f"{total_trades}"
-                    ]
-                }
-                
-                st.dataframe(pd.DataFrame(metrics_data), use_container_width=True, hide_index=True)
-                
-        # Trade distribution charts
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            st.subheader("P&L Distribution")
-            
-            fig = px.histogram(
-                closed_trades,
-                x='pnl_pct',
-                nbins=20,
-                title="Trade Returns Distribution",
-                labels={'pnl_pct': 'Return (%)', 'count': 'Frequency'}
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-        with col2:
-            st.subheader("Symbol Performance")
-            
-            symbol_performance = closed_trades.groupby('symbol')['pnl'].sum().sort_values(ascending=False)
-            
-            fig = px.bar(
-                x=symbol_performance.index,
-                y=symbol_performance.values,
-                title="P&L by Symbol",
-                labels={'x': 'Symbol', 'y': 'Total P&L (₹)'}
-            )
-            
-            st.plotly_chart(fig, use_container_width=True)
-            
-    else:
-        st.warning("No trading data available")
+@app.on_event("shutdown")
+async def shutdown_event():
+    await trading_system.shutdown()
+    logger.info("Trading system shutdown on app termination")
 
-def render_ai_insights(components):
-    """Render AI insights and decision analytics"""
-    st.header("🧠 AI Insights")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("AI Decision Analytics")
-        
-        # Simulated AI decision data
-        decision_data = pd.DataFrame({
-            'timestamp': pd.date_range(start=datetime.now() - timedelta(hours=24), periods=100, freq='15min'),
-            'decisions_made': np.random.poisson(3, 100),
-            'decisions_approved': np.random.poisson(1, 100),
-            'avg_confidence': np.random.uniform(0.6, 0.9, 100)
-        })
-        
-        fig = make_subplots(
-            rows=2, cols=1,
-            subplot_titles=('Decision Volume', 'Average Confidence'),
-            vertical_spacing=0.1
-        )
-        
-        fig.add_trace(
-            go.Scatter(
-                x=decision_data['timestamp'],
-                y=decision_data['decisions_made'],
-                name='Total Decisions',
-                line=dict(color='blue')
-            ),
-            row=1, col=1
-        )
-        
-        fig.add_trace(
-            go.Scatter(
-                x=decision_data['timestamp'],
-                y=decision_data['decisions_approved'],
-                name='Approved',
-                line=dict(color='green')
-            ),
-            row=1, col=1
-        )
-        
-        fig.add_trace(
-            go.Scatter(
-                x=decision_data['timestamp'],
-                y=decision_data['avg_confidence'],
-                name='Avg Confidence',
-                line=dict(color='orange')
-            ),
-            row=2, col=1
-        )
-        
-        fig.update_layout(height=400, showlegend=True)
-        st.plotly_chart(fig, use_container_width=True)
-        
-    with col2:
-        st.subheader("Market Regime Detection")
-        
-        # Simulated regime data
-        regime_data = pd.DataFrame({
-            'date': pd.date_range(start=datetime.now() - timedelta(days=30), periods=30, freq='D'),
-            'regime': np.random.choice(['BULL', 'BEAR', 'SIDEWAYS'], 30, p=[0.4, 0.2, 0.4]),
-            'confidence': np.random.uniform(0.6, 0.95, 30)
-        })
-        
-        # Current regime
-        current_regime = regime_data.iloc[-1]
-        
-        st.metric(
-            "Current Regime",
-            current_regime['regime'],
-            f"Confidence: {current_regime['confidence']:.2f}"
-        )
-        
-        # Regime history
-        regime_counts = regime_data['regime'].value_counts()
-        
-        fig = px.pie(
-            values=regime_counts.values,
-            names=regime_counts.index,
-            title="Regime Distribution (Last 30 Days)"
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-
-def render_risk_monitoring(components):
-    """Render risk monitoring section"""
-    st.header("🛡️ Risk Monitoring")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.subheader("Risk Metrics")
-        
-        # Simulated risk data
-        risk_metrics = {
-            'Portfolio Risk': '2.5%',
-            'VaR (95%)': '₹45,000',
-            'Max Position Size': '8.5%',
-            'Daily Trade Limit': '2/3',
-            'Correlation Risk': 'Low',
-            'Leverage': '1.2x'
-        }
-        
-        for metric, value in risk_metrics.items():
-            st.metric(metric, value)
-            
-    with col2:
-        st.subheader("Position Concentration")
-        
-        # Simulated position data
-        position_data = pd.DataFrame({
-            'symbol': ['RELIANCE', 'TCS', 'HDFCBANK', 'INFY', 'ICICIBANK'],
-            'allocation': [15, 12, 10, 8, 7],
-            'risk_contribution': [18, 14, 12, 9, 8]
-        })
-        
-        fig = px.bar(
-            position_data,
-            x='symbol',
-            y=['allocation', 'risk_contribution'],
-            title="Allocation vs Risk Contribution",
-            barmode='group'
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
-        
-    with col3:
-        st.subheader("Risk Alerts")
-        
-        # Simulated alerts
-        alerts = [
-            "🟢 All risk limits within bounds",
-            "🟡 Position concentration at 85% of limit",
-            "🟢 Drawdown within acceptable range",
-            "🟡 Correlation risk slightly elevated"
-        ]
-        
-        for alert in alerts:
-            st.write(alert)
-
-def render_system_status(components):
-    """Render system status section"""
-    st.header("⚙️ System Status")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.subheader("Component Status")
-        
-        # Simulated system status
-        system_status = {
-            'AI Gate': '🟢 Operational',
-            'Market Data': '🟢 Connected',
-            'Database': '🟢 Healthy',
-            'Risk Manager': '🟢 Active',
-            'Portfolio Manager': '🟢 Running',
-            'Telegram Alerts': '🟡 Connected'
-        }
-        
-        for component, status in system_status.items():
-            st.write(f"**{component}:** {status}")
-            
-    with col2:
-        st.subheader("Performance Stats")
-        
-        perf_stats = {
-            'Uptime': '99.5%',
-            'Avg Response Time': '45ms',
-            'Orders Processed': '1,247',
-            'Data Points': '2.4M',
-            'Model Accuracy': '73.2%',
-            'Last Backup': '2 hours ago'
-        }
-        
-        for stat, value in perf_stats.items():
-            st.metric(stat, value)
-            
-    with col3:
-        st.subheader("Recent Logs")
-        
-        # Simulated log entries
-        logs = [
-            f"{datetime.now().strftime('%H:%M:%S')} - Trade executed: RELIANCE",
-            f"{(datetime.now() - timedelta(minutes=5)).strftime('%H:%M:%S')} - AI decision: APPROVED",
-            f"{(datetime.now() - timedelta(minutes=10)).strftime('%H:%M:%S')} - Market data updated",
-            f"{(datetime.now() - timedelta(minutes=15)).strftime('%H:%M:%S')} - Risk check passed",
-            f"{(datetime.now() - timedelta(minutes=20)).strftime('%H:%M:%S')} - Portfolio rebalanced"
-        ]
-        
-        for log in logs:
-            st.text(log)
-
-def render_controls(components):
-    """Render system controls"""
-    st.header("🎛️ System Controls")
-    
-    col1, col2, col3 = st.columns(3)
-    
-    with col1:
-        st.subheader("Trading Controls")
-        
-        trading_enabled = st.toggle("Enable Trading", value=True)
-        max_daily_trades = st.slider("Max Daily Trades", 1, 10, 3)
-        confidence_threshold = st.slider("AI Confidence Threshold", 0.5, 1.0, 0.7, 0.05)
-        position_size_limit = st.slider("Max Position Size (%)", 1, 20, 10)
-        
-        if st.button("Apply Trading Settings"):
-            st.success("Trading settings updated!")
-            
-    with col2:
-        st.subheader("Risk Controls")
-        
-        emergency_stop = st.button("🚨 Emergency Stop", type="primary")
-        close_all_positions = st.button("Close All Positions")
-        
-        if emergency_stop:
-            st.error("Emergency stop activated! All trading halted.")
-            
-        if close_all_positions:
-            st.warning("Closing all open positions...")
-            
-        portfolio_risk_limit = st.slider("Portfolio Risk Limit (%)", 1, 10, 5)
-        drawdown_limit = st.slider("Max Drawdown Limit (%)", 5, 25, 15)
-        
-    with col3:
-        st.subheader("System Actions")
-        
-        if st.button("Refresh Data"):
-            st.cache_data.clear()
-            st.success("Data refreshed!")
-            
-        if st.button("Retrain AI Models"):
-            st.info("AI model retraining initiated...")
-            
-        if st.button("Generate Report"):
-            st.info("Generating performance report...")
-            
-        if st.button("Backup Data"):
-            st.success("Data backup completed!")
-
-# Sidebar
-def render_sidebar():
-    """Render sidebar with navigation and quick stats"""
-    st.sidebar.title("Navigation")
-    
-    # Quick stats
-    st.sidebar.subheader("Quick Stats")
-    
-    market_status = load_market_status()
-    
-    st.sidebar.metric("Market", "OPEN" if market_status['is_open'] else "CLOSED")
-    st.sidebar.metric("Nifty 50", f"{market_status['nifty_level']:.0f}")
-    st.sidebar.metric("VIX", f"{market_status['volatility_index']:.1f}")
-    
-    # Time ranges
-    st.sidebar.subheader("Time Range")
-    time_range = st.sidebar.selectbox(
-        "Select Range",
-        ["1D", "1W", "1M", "3M", "6M", "1Y"]
-    )
-    
-    # Refresh controls
-    st.sidebar.subheader("Controls")
-    auto_refresh = st.sidebar.checkbox("Auto Refresh", value=True)
-    
-    if auto_refresh:
-        refresh_interval = st.sidebar.slider("Refresh Interval (sec)", 10, 300, 60)
-        
-    if st.sidebar.button("Manual Refresh"):
-        st.cache_data.clear()
-        st.rerun()
-        
-    # System info
-    st.sidebar.subheader("System Info")
-    st.sidebar.info(f"Last Update: {datetime.now().strftime('%H:%M:%S')}")
-    st.sidebar.info("Version: 1.0.0")
-
-# Main app
-def main():
-    """Main dashboard application"""
-    
-    # Initialize components
-    components = initialize_components()
-    
-    # Render sidebar
-    render_sidebar()
-    
-    # Render main content
-    render_header()
-    
-    # Create tabs for different sections
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
-        "📊 Portfolio",
-        "⚡ Trading", 
-        "🧠 AI Insights",
-        "🛡️ Risk",
-        "⚙️ System",
-        "🎛️ Controls"
-    ])
-    
-    with tab1:
-        render_portfolio_overview(components)
-        
-    with tab2:
-        render_trading_activity(components)
-        
-    with tab3:
-        render_ai_insights(components)
-        
-    with tab4:
-        render_risk_monitoring(components)
-        
-    with tab5:
-        render_system_status(components)
-        
-    with tab6:
-        render_controls(components)
-        
-    # Auto-refresh capability
-    # if st.sidebar.checkbox("Auto Refresh", value=True):
-    #    time.sleep(60)  # Refresh every minute
-    #    st.rerun()
-
+# Replace the old `if __name__ == "__main__"` block with this:
 if __name__ == "__main__":
-    main()
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
