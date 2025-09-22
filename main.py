@@ -60,7 +60,7 @@ def initialize_components():
 
 # Load data functions
 @st.cache_data(ttl=60)  # Cache for 60 seconds
-def load_portfolio_data(db_manager):
+def load_portfolio_data(_db_manager):
     """Load portfolio data"""
     try:
         query = """
