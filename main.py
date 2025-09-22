@@ -268,7 +268,3 @@ async def run_trading():
 async def shutdown_event():
     await trading_system.shutdown()
     logger.info("Trading system shutdown on app termination")
-
-# Replace the old `if __name__ == "__main__"` block with this:
-if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
