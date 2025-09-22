@@ -14,7 +14,7 @@ lightgbm
 tensorflow
 optuna
 hmmlearn
-gym
+gymnasium
 stable_baselines3
 pandas_ta
 seaborn
