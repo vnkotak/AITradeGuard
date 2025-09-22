@@ -16,3 +16,4 @@ hmmlearn
 gym
 stable_baselines3
 pandas_ta
+seaborn
