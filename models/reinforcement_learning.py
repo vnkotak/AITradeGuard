@@ -24,7 +24,7 @@ from database.db_manager import DatabaseManager
 
 logger = logging.getLogger(__name__)
 
-class TradingEnvironment(gym.Env):
+class TradingEnvironment(gymnasium.Env):
     """
     Custom trading environment for reinforcement learning
     """
